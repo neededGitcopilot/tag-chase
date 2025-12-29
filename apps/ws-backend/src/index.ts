@@ -3,12 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 
 const wss = new WebSocketServer({ port: 8080 });
 const rooms: Record<number, Set<WebSocket>> = {};
-const players: [{
-  username: string,
-  x: number,
-  y: number
-  start_timer: number
-}] = [];
+
 
 function broadcastToRoom(
   roomId: number,
