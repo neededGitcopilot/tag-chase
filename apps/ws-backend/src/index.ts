@@ -1,70 +1,111 @@
 import { WebSocket, WebSocketServer } from "ws";
 import { v4 as uuidv4 } from "uuid";
 
-const wss = new WebSocketServer({ port: 8080 });
-const rooms: Record<number, Set<WebSocket>> = {};
-
-
-function broadcastToRoom(
-  roomId: number,
-  data: {
-    message: string;
-    type: string;
-  },
-  exceptSocket: WebSocket | null = null
-) {
-  const room = rooms[roomId];
-  if (!room) return;
-
-  room.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN && client !== exceptSocket) {
-      client.send(JSON.stringify(data));
-    }
-  });
+interface Player {
+  username: string;
+  x?: number;
+  y?: number;
+  ws?: WebSocket;
 }
+interface RoomType {
+  player: Player[];
+  roomId: string;
+}
+
+const wss = new WebSocketServer({ port: 8080 });
+
+//for user creating room
+const rooms: RoomType[] = [];
+
 wss.on("connection", (ws) => {
   const userId = uuidv4();
-  let roomId = null;
-  let username = null;
   ws.on("message", (message: Buffer) => {
     try {
       const msg = JSON.parse(message.toString()) as {
-        username: string;
-        room: number;
         type: string;
+        roomId: string;
+        payload: {
+          username: string;
+          x?: number;
+          y?: number;
+        };
       };
+      // ----- on join player this message get -------
+      // type: join
+      // roomId
+      // payload { username, x , y}
 
-      if ((msg.type === "join")) {
-        roomId = msg.room;
-        username = msg.username;
-        if (!rooms[roomId]) rooms[roomId] = new Set();
-        rooms[roomId]?.add(ws)
-        broadcastToRoom(roomId, {
-          type: 'notification',
-          message: `${username} joined the room.`,
-        }, ws);
+      if (msg.type === "join") {
+        let currentRoom =
+          msg.roomId && rooms.find((r) => r.roomId === msg.roomId);
+
+        if (!currentRoom) {
+          currentRoom = { roomId: msg.roomId, player: [] };
+          rooms.push(currentRoom);
+        }
+
+        // check room already has 2 player or not
+        if (currentRoom && currentRoom?.player?.length >= 2) {
+          ws.send(
+            JSON.stringify({
+              type: "error",
+              message: "Room is full ",
+            })
+          );
+          return;
+        }
+
+        // prevent from similar username ( in future this is replace with unique userId )
+        const alreadyExist = currentRoom?.player.find(
+          (p) => p.username === msg.payload.username
+        );
+        if (alreadyExist) {
+          ws.send(
+            JSON.stringify({
+              type: "error",
+              message: "username already exist ",
+            })
+          );
+        }
+        //add user
+        //room is here reference so there is technically pushing player in main rooms section
+        currentRoom?.player.push({
+          username: msg.payload.username,
+          ws,
+        });
+        ws.send(
+          JSON.stringify({
+            type: "joined",
+            roomId: msg.roomId,
+            player: currentRoom.player.map((p) => p.username),
+          })
+        );
+        if (currentRoom && currentRoom?.player?.length === 2) {
+          ws.send(
+            JSON.stringify({
+              type: "game_ready",
+              payload: {
+                playerId: userId,
+                role: "tagger",// or Chaser
+                opponent: {
+                  username: "player2",
+                },
+                round: 1,
+                totalRound: 10,
+              }
+            })
+          );
+        }
       }
-      if ((msg.type === "join")) {
-        roomId = msg.room;
-        username = msg.username;
-        
-        if (!rooms[roomId]) rooms[roomId] = new Set();
-        rooms[roomId]?.add(ws)
-        broadcastToRoom(roomId, {
-          type: 'notification',
-          message: `${username} joined the room.`,
-        }, ws);
-      }
-      if ((msg.type === "move")) {
-        roomId = msg.room;
-        username = msg.username;
-        if (!rooms[roomId]) rooms[roomId] = new Set();
-        rooms[roomId]?.add(ws)
-        broadcastToRoom(roomId, {
-          type: 'notification',
-          message: `${username} joined the room.`,
-        }, ws);
-      }
-    } catch (error) {}
+    } catch (error) {
+      console.error("Invalid message:", error);
+    }
+    ws.on("close", () => {
+      rooms.forEach((r) => {
+        console.log(r);
+        return (r.player = r.player.filter((p) => p.ws !== ws));
+      });
+      console.log(rooms);
+    });
   });
 });
