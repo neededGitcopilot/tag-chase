@@ -17,8 +17,17 @@ const wss = new WebSocketServer({ port: 8080 });
 //for user creating room
 const rooms: RoomType[] = [];
 
+// this function send msg all playere
+const broadcastMsg = (room: RoomType, data: object) => {
+  room.player.forEach((player) => player.ws?.send(JSON.stringify(data)));
+};
+
 wss.on("connection", (ws) => {
   const userId = uuidv4();
+  const round = 1;
+  const role = ["tagger", "chaser"];
+  const totalRound = 10;
+  const countdown = 3;
   ws.on("message", (message: Buffer) => {
     try {
       const msg = JSON.parse(message.toString()) as {
@@ -81,21 +90,34 @@ wss.on("connection", (ws) => {
           })
         );
         if (currentRoom && currentRoom?.player?.length === 2) {
-          ws.send(
-            JSON.stringify({
-              type: "game_ready",
-              payload: {
-                playerId: userId,
-                role: "tagger",// or Chaser
-                opponent: {
-                  username: "player2",
-                },
-                round: 1,
-                totalRound: 10,
-              }
-            })
-          );
+          broadcastMsg(currentRoom, {
+            type: "game_ready",
+            start_in: `${countdown} seconds`,
+            payload: {
+              playerId: userId,
+              role: role[Math.random() * role.length] as string,
+              opponent: {
+                // in future there is more than 2 player so providing in array of username
+                username: currentRoom?.player.filter(
+                  (p) => p.username !== msg.payload.username
+                ),
+              },
+              round: round,
+              totalRound: totalRound,
+            },
+          });
         }
+      }
+      // on move payload recive
+      //   {
+      //     type: "move"
+      //     payload: {
+      //         x: 0,
+      //         y:0,
+      //     }
+      //   }
+      if (msg.type === "move") {
+        ws.send;
       }
     } catch (error) {
       console.error("Invalid message:", error);
