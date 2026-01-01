@@ -1,33 +1,58 @@
 import { WebSocket, WebSocketServer } from "ws";
 import { v4 as uuidv4 } from "uuid";
 
+type Role = "tagger" | "chaser";
+type RoomState = "waiting" | "ready" | "countdown" | "playing" | "finished" | "error";
+
 interface Player {
+  id: string;
   username: string;
   x?: number;
   y?: number;
   ws?: WebSocket;
+  role?: Role;
 }
-interface RoomType {
+interface Room {
+  id: string;
   player: Player[];
-  roomId: string;
+  state: RoomState;
+  round: number;
+  totalRound: number;
+  countdownTimer?: NodeJS.Timeout;
 }
 
 const wss = new WebSocketServer({ port: 8080 });
 
 //for user creating room
-const rooms: RoomType[] = [];
+const rooms: Room[] = [];
 
 // this function send msg all playere
-const broadcastMsg = (room: RoomType, data: object) => {
+const broadcastMsg = (room: Room, data: object) => {
   room.player.forEach((player) => player.ws?.send(JSON.stringify(data)));
 };
 
+const startCountdown = (room: Room) => {
+  let countdown = 3;
+  room.state = "countdown";
+  setInterval(() => {
+    if(countdown > 0 ) {
+      broadcastMsg(room, {
+        type: "countdown",
+        countdown: `${countdown} seconds`,
+      });
+    }
+    countdown--;
+    if(countdown === 0) {
+      room.state = "playing";
+      broadcastMsg(room, {
+        type: "game_started",
+      });
+    }
+  },1000)
+}
+
 wss.on("connection", (ws) => {
-  const userId = uuidv4();
-  const round = 1;
-  const role = ["tagger", "chaser"];
-  const totalRound = 10;
-  const countdown = 3;
+  const playerId = uuidv4();
   ws.on("message", (message: Buffer) => {
     try {
       const msg = JSON.parse(message.toString()) as {
@@ -45,16 +70,16 @@ wss.on("connection", (ws) => {
       // payload { username, x , y}
 
       if (msg.type === "join") {
-        let currentRoom =
-          msg.roomId && rooms.find((r) => r.roomId === msg.roomId);
-
-        if (!currentRoom) {
-          currentRoom = { roomId: msg.roomId, player: [] };
-          rooms.push(currentRoom);
+        let room =
+          msg.roomId && rooms.find((r) => r.id === msg.roomId);
+console.log("room", room);
+        if (!room) {
+          room = { id: msg.roomId, player: [], state: "waiting", round: 1, totalRound: 10 };
+          rooms.push(room);
         }
 
         // check room already has 2 player or not
-        if (currentRoom && currentRoom?.player?.length >= 2) {
+        if (room && room?.player?.length >= 2) {
           ws.send(
             JSON.stringify({
               type: "error",
@@ -65,7 +90,7 @@ wss.on("connection", (ws) => {
         }
 
         // prevent from similar username ( in future this is replace with unique userId )
-        const alreadyExist = currentRoom?.player.find(
+        const alreadyExist = room?.player.find(
           (p) => p.username === msg.payload.username
         );
         if (alreadyExist) {
@@ -78,36 +103,39 @@ wss.on("connection", (ws) => {
         }
         //add user
         //room is here reference so there is technically pushing player in main rooms section
-        currentRoom?.player.push({
+        room?.player.push({ 
+          id: playerId,
           username: msg.payload.username,
-          ws,
+          // we can't set role here because we don't know which player is tagger and which is chaser
+          // role: Math.random() < 0.5 ? "tagger" : "chaser",
+          ws: ws as WebSocket,
+          x: msg.payload.x || 0,
+          y: msg.payload.y || 0,
         });
         ws.send(
           JSON.stringify({
             type: "joined",
             roomId: msg.roomId,
-            player: currentRoom.player.map((p) => p.username),
+            player: room.player.map((p) => p.username),
           })
         );
-        if (currentRoom && currentRoom?.player?.length === 2) {
-          broadcastMsg(currentRoom, {
-            type: "game_ready",
-            start_in: `${countdown} seconds`,
-            payload: {
-              playerId: userId,
-              role: role[Math.random() * role.length] as string,
-              opponent: {
-                // in future there is more than 2 player so providing in array of username
-                username: currentRoom?.player.filter(
-                  (p) => p.username !== msg.payload.username
-                ),
-              },
-              round: round,
-              totalRound: totalRound,
-            },
+        if (room && room?.player?.length === 2 && room.state === "waiting") {
+          room.state = "ready";
+
+          // set random role for each player
+          room.player.forEach((p) => {
+            p.role = Math.random() < 0.5 ? "tagger" : "chaser";
           });
+          broadcastMsg(room, {
+            type: "game_ready",
+            payload: {
+              player: room.player.map((p) => p.username),
+            }
+          });
+          startCountdown(room);
         }
       }
+
       // on move payload recive
       //   {
       //     type: "move",
@@ -117,24 +145,34 @@ wss.on("connection", (ws) => {
       //         y:0,
       //     }
       //   }
-      if (msg.type === "move") {
-        const currentRoom = rooms.find(room => room.roomId === msg.roomId)
-        if(!currentRoom) {
+      if (msg.type === "move" && rooms.find(room => room.id === msg.roomId)?.state === "playing") {
+        const room = rooms.find(room => room.id === msg.roomId)
+        if(!room) {
           return;
         }
-        const payload = currentRoom?.player.filter(p => {
-          return {
-            ...p,
-            x: msg?.payload?.x,
-            y: msg?.payload?.y
+        room.player.forEach((p) => {
+          if(p.id === playerId) {
+            p.x = msg.payload.x || 0;
+            p.y = msg.payload.y || 0;
           }
         })
-        broadcastMsg(currentRoom, {
+        broadcastMsg(room, {
           type: 'coordinate',
-          payload: payload
+          payload: room.player.map((p) => ({
+            id: p.id,
+            username: p.username,
+            x: p.x,
+            y: p.y,
+          }))
         })
+        if(rooms.find(room => room.id === msg.roomId)?.player.every(p => p.x === rooms.find(room => room.id === msg.roomId)?.player[0]?.x && p.y === rooms.find(room => room.id === msg.roomId)?.player[0]?.y)) {
+          rooms.find(room => room.id === msg.roomId)!.state = "finished";
+          broadcastMsg(rooms.find(room => room.id === msg.roomId)!, {
+            type: "game_finished",
+          });
+          return;
+        }
       }
-      
     } catch (error) {
       console.error("Invalid message:", error);
     }
