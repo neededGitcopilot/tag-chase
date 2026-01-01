@@ -110,15 +110,31 @@ wss.on("connection", (ws) => {
       }
       // on move payload recive
       //   {
-      //     type: "move"
+      //     type: "move",
+      //     roomId: "green"
       //     payload: {
       //         x: 0,
       //         y:0,
       //     }
       //   }
       if (msg.type === "move") {
-        ws.send;
+        const currentRoom = rooms.find(room => room.roomId === msg.roomId)
+        if(!currentRoom) {
+          return;
+        }
+        const payload = currentRoom?.player.filter(p => {
+          return {
+            ...p,
+            x: msg?.payload?.x,
+            y: msg?.payload?.y
+          }
+        })
+        broadcastMsg(currentRoom, {
+          type: 'coordinate',
+          payload: payload
+        })
       }
+      
     } catch (error) {
       console.error("Invalid message:", error);
     }
